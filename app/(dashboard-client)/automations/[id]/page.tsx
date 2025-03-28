@@ -1,5 +1,3 @@
-"use client";
-
 // Interface for a message block
 interface MessageBlock {
   id: string;
@@ -17,7 +15,8 @@ interface AutomationPageProps {
   };
 }
 
-export default async function AutomationPage({ params }: AutomationPageProps) {
+// Server-side function to fetch automation data
+export async function getServerSideProps({ params }: AutomationPageProps) {
   const { id } = params;
 
   // Use the server action to get the automation by ID
@@ -28,5 +27,9 @@ export default async function AutomationPage({ params }: AutomationPageProps) {
     notFound();
   }
 
+  return { props: { automation } };
+}
+
+export default function AutomationPage({ automation }: { automation: any }) {
   return <AutomationDetail automation={automation} />;
 }
