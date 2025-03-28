@@ -404,18 +404,30 @@ export async function addLogToAutomation(
 
     // Verificar se o automationId é válido
     if (!automationId || typeof automationId !== "string") {
-      throw new Error(`Invalid automationId: ${automationId}`);
+      logger.error(`Invalid automationId: ${automationId}`);
+      return false;
     }
 
     // Verificar se a automação existe antes de adicionar o log
-    const { data: existingAutomation, error: fetchError } = await supabase
-      .from("automations")
-      .select("id")
-      .eq("id", automationId)
-      .single();
+    try {
+      const { data: existingAutomation, error: fetchError } = await supabase
+        .from("automations")
+        .select("id")
+        .eq("id", automationId)
+        .single();
 
-    if (fetchError) {
-      throw new Error(`Automation not found: ${fetchError.message}`);
+      if (fetchError) {
+        logger.error(`Automation not found: ${fetchError.message}`);
+        return false;
+      }
+    } catch (checkError) {
+      logger.error(
+        `Error checking automation existence: ${
+          checkError instanceof Error ? checkError.message : "Unknown error"
+        }`
+      );
+      // Continue mesmo se não conseguir verificar a existência
+      // Em alguns casos, pode ser melhor tentar registrar o log mesmo assim
     }
 
     // Preparar os dados do log com tratamento para valores nulos/undefined
@@ -428,20 +440,75 @@ export async function addLogToAutomation(
       created_at: new Date().toISOString(),
     };
 
-    // Inserir o log com tratamento de erro detalhado
-    const { error } = await supabase.from("automation_logs").insert(logData);
+    // Verificar se a tabela automation_logs existe
+    try {
+      const { error: tableCheckError } = await supabase
+        .from("automation_logs")
+        .select("id")
+        .limit(1);
 
-    if (error) {
-      logger.error(`Error inserting log: ${error.message}`, {
-        code: error.code,
-        details: error.details,
-        hint: error.hint,
-      });
-      throw error;
+      if (tableCheckError) {
+        logger.error(
+          `Error checking automation_logs table: ${tableCheckError.message}`
+        );
+
+        // Tentar criar a tabela se ela não existir
+        try {
+          await supabase.rpc("create_automation_logs_if_not_exists");
+          logger.info("Created automation_logs table");
+        } catch (createError) {
+          logger.error(
+            `Failed to create automation_logs table: ${
+              createError instanceof Error
+                ? createError.message
+                : "Unknown error"
+            }`
+          );
+          return false;
+        }
+      }
+    } catch (tableError) {
+      logger.error(
+        `Error checking table: ${
+          tableError instanceof Error ? tableError.message : "Unknown error"
+        }`
+      );
+    }
+
+    // Inserir o log com tratamento de erro detalhado
+    try {
+      const { error } = await supabase.from("automation_logs").insert(logData);
+
+      if (error) {
+        logger.error(`Error inserting log: ${error.message}`, {
+          code: error.code,
+          details: error.details,
+          hint: error.hint,
+        });
+        return false;
+      }
+    } catch (insertError) {
+      logger.error(
+        `Exception during log insertion: ${
+          insertError instanceof Error ? insertError.message : "Unknown error"
+        }`
+      );
+      return false;
     }
 
     // Revalidar a página de logs
-    revalidatePath(`/automations/${automationId}/logs`);
+    try {
+      revalidatePath(`/automations/${automationId}/logs`);
+    } catch (revalidateError) {
+      logger.error(
+        `Error revalidating path: ${
+          revalidateError instanceof Error
+            ? revalidateError.message
+            : "Unknown error"
+        }`
+      );
+      // Não falhar só porque a revalidação falhou
+    }
 
     return true;
   } catch (error) {
@@ -463,18 +530,10 @@ export async function addLogToAutomation(
 
     // Tentar registrar o erro em um log de sistema separado
     try {
-      await supabase.from("system_logs").insert({
-        component: "automation_logger",
-        level: "error",
-        message: `Failed to add log to automation ${automationId}: ${errorMessage}`,
-        details: {
-          automationId,
-          error: errorMessage,
-          stack: errorStack,
-          originalLog: log,
-        },
-        created_at: new Date().toISOString(),
-      });
+      console.error(
+        `Failed to add log to automation ${automationId}: ${errorMessage}`
+      );
+      // Não usar system_logs aqui para evitar mais erros
     } catch (logError) {
       console.error("Failed to log system error:", logError);
     }

@@ -4,6 +4,7 @@ import {
   getAutomationByPath,
 } from "@/app/actions/automation-actions";
 import { type NextRequest, NextResponse } from "next/server";
+import { logger } from "@/lib/logger";
 
 // Adicionar uma função de log mais detalhada
 function logWithTimestamp(message: string, data?: any) {
@@ -44,12 +45,12 @@ export async function POST(
       );
     }
 
+    // Log apenas os campos seguros da automação (evitando expor dados sensíveis)
     logWithTimestamp(`Automação encontrada:`, {
       id: automation.id,
       name: automation.name,
-      type: automation.type,
+      type: automation.type || automation.trigger_type,
       active: automation.active,
-      config: automation.config,
     });
 
     // Obter o corpo da requisição
@@ -65,15 +66,19 @@ export async function POST(
       );
 
       // Registrar o log de erro
-      await addLogToAutomation(automation.id, {
-        status: "error",
-        message: `Erro ao processar o corpo da requisição: ${
-          error instanceof Error ? error.message : "Erro desconhecido"
-        }`,
-        payload: {
-          error: error instanceof Error ? error.message : "Erro desconhecido",
-        },
-      });
+      try {
+        await addLogToAutomation(automation.id, {
+          status: "error",
+          message: `Erro ao processar o corpo da requisição: ${
+            error instanceof Error ? error.message : "Erro desconhecido"
+          }`,
+          payload: {
+            error: error instanceof Error ? error.message : "Erro desconhecido",
+          },
+        });
+      } catch (logError) {
+        logger.error("Falha ao registrar log de erro:", logError);
+      }
 
       return NextResponse.json(
         { error: "Corpo da requisição inválido" },
@@ -87,17 +92,30 @@ export async function POST(
       `Verificando chave secreta. Header recebido: ${secretHeader || "nenhum"}`
     );
 
-    if (automation.config.secret && secretHeader !== automation.config.secret) {
+    // Verificar se config existe e se tem uma propriedade secret
+    // Ou verificar se trigger_config existe e se tem uma propriedade secret (novo formato)
+    const configSecret =
+      (automation.config && automation.config.secret) ||
+      (automation.trigger_config && automation.trigger_config.secret);
+
+    if (configSecret && secretHeader !== configSecret) {
       logWithTimestamp(
-        `Chave secreta inválida. Esperado: ${automation.config.secret}, Recebido: ${secretHeader}`
+        `Chave secreta inválida. Esperado: ${configSecret}, Recebido: ${secretHeader}`
       );
 
       // Registrar o log de erro de autenticação
-      await addLogToAutomation(automation.id, {
-        status: "error",
-        message: "Chave secreta inválida",
-        payload: body,
-      });
+      try {
+        await addLogToAutomation(automation.id, {
+          status: "error",
+          message: "Chave secreta inválida",
+          payload: { receivedHeader: secretHeader },
+        });
+      } catch (logError) {
+        logger.error(
+          "Falha ao registrar log de erro de autenticação:",
+          logError
+        );
+      }
 
       return NextResponse.json(
         { error: "Chave secreta inválida" },
@@ -107,7 +125,7 @@ export async function POST(
 
     logWithTimestamp(
       `Validação de chave secreta: ${
-        automation.config.secret ? "Sucesso" : "Não necessária"
+        configSecret ? "Sucesso" : "Não necessária"
       }`
     );
 
@@ -118,11 +136,15 @@ export async function POST(
       );
 
       // Registrar o log de erro de validação
-      await addLogToAutomation(automation.id, {
-        status: "error",
-        message: "Campo 'telefone' não encontrado no corpo da requisição",
-        payload: body,
-      });
+      try {
+        await addLogToAutomation(automation.id, {
+          status: "error",
+          message: "Campo 'telefone' não encontrado no corpo da requisição",
+          payload: body,
+        });
+      } catch (logError) {
+        logger.error("Falha ao registrar log de erro de validação:", logError);
+      }
 
       return NextResponse.json(
         { error: "O campo 'telefone' é obrigatório" },
@@ -170,20 +192,24 @@ export async function POST(
     try {
       const automation = await getAutomationByPath(params.path);
       if (automation) {
-        await addLogToAutomation(automation.id, {
-          status: "error",
-          message: `Erro interno ao processar webhook: ${
-            error.message || "Erro desconhecido"
-          }`,
-          payload: {
-            path: params.path,
-            error: error.message,
-            stack: error.stack,
-          },
-        });
+        try {
+          await addLogToAutomation(automation.id, {
+            status: "error",
+            message: `Erro interno ao processar webhook: ${
+              error.message || "Erro desconhecido"
+            }`,
+            payload: {
+              path: params.path,
+              error: error.message,
+              stack: error.stack,
+            },
+          });
+        } catch (logError) {
+          logger.error("Falha ao registrar log de erro:", logError);
+        }
       }
-    } catch (logError) {
-      console.error("Erro ao registrar log de erro:", logError);
+    } catch (pathError) {
+      logger.error("Erro ao buscar automação por path:", pathError);
     }
 
     return NextResponse.json(
