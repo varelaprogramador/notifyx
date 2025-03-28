@@ -397,30 +397,88 @@ export async function addLogToAutomation(
   }
 ): Promise<boolean> {
   try {
-    logger.info(`Server Action: Adding log to automation: ${automationId}`);
-
-    const { error } = await supabase.from("automation_logs").insert({
-      automation_id: automationId,
-      event_type: "custom_log",
+    logger.info(`Server Action: Adding log to automation: ${automationId}`, {
       status: log.status,
-      message: log.message,
-      payload: log.payload,
-      created_at: new Date().toISOString(),
+      message: log.message?.substring(0, 100),
     });
 
+    // Verificar se o automationId é válido
+    if (!automationId || typeof automationId !== "string") {
+      throw new Error(`Invalid automationId: ${automationId}`);
+    }
+
+    // Verificar se a automação existe antes de adicionar o log
+    const { data: existingAutomation, error: fetchError } = await supabase
+      .from("automations")
+      .select("id")
+      .eq("id", automationId)
+      .single();
+
+    if (fetchError) {
+      throw new Error(`Automation not found: ${fetchError.message}`);
+    }
+
+    // Preparar os dados do log com tratamento para valores nulos/undefined
+    const logData = {
+      automation_id: automationId,
+      event_type: "custom_log",
+      status: log.status || "error",
+      message: log.message || "No message provided",
+      payload: log.payload || {},
+      created_at: new Date().toISOString(),
+    };
+
+    // Inserir o log com tratamento de erro detalhado
+    const { error } = await supabase.from("automation_logs").insert(logData);
+
     if (error) {
+      logger.error(`Error inserting log: ${error.message}`, {
+        code: error.code,
+        details: error.details,
+        hint: error.hint,
+      });
       throw error;
     }
 
-    // Revalidate the automation logs page to reflect the changes
+    // Revalidar a página de logs
     revalidatePath(`/automations/${automationId}/logs`);
 
     return true;
   } catch (error) {
+    // Log detalhado do erro
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+    const errorStack = error instanceof Error ? error.stack : undefined;
+
     logger.error(
       `Error in addLogToAutomation server action for ID ${automationId}:`,
-      error
+      {
+        message: errorMessage,
+        stack: errorStack,
+        automationId,
+        logStatus: log.status,
+        logMessage: log.message,
+      }
     );
+
+    // Tentar registrar o erro em um log de sistema separado
+    try {
+      await supabase.from("system_logs").insert({
+        component: "automation_logger",
+        level: "error",
+        message: `Failed to add log to automation ${automationId}: ${errorMessage}`,
+        details: {
+          automationId,
+          error: errorMessage,
+          stack: errorStack,
+          originalLog: log,
+        },
+        created_at: new Date().toISOString(),
+      });
+    } catch (logError) {
+      console.error("Failed to log system error:", logError);
+    }
+
     return false;
   }
 }
