@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { getCurrentUserId } from "@/lib/current-user";
 import { logger } from "@/lib/logger";
 import type { Automation } from "@/lib/automations-service";
+import { revalidatePath } from "next/cache";
 
 // Initialize Supabase client
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string;
@@ -103,6 +104,9 @@ export async function addAutomation(
       throw error;
     }
 
+    // Revalidate the automations page to reflect the changes
+    revalidatePath("/automations");
+
     return data;
   } catch (error) {
     logger.error("Error in addAutomation server action:", error);
@@ -158,6 +162,10 @@ export async function updateAutomation(
       throw error;
     }
 
+    // Revalidate the automations page to reflect the changes
+    revalidatePath("/automations");
+    revalidatePath(`/automations/${id}`);
+
     return data;
   } catch (error) {
     logger.error(
@@ -202,6 +210,9 @@ export async function deleteAutomation(id: string): Promise<boolean> {
     if (error) {
       throw error;
     }
+
+    // Revalidate the automations page to reflect the changes
+    revalidatePath("/automations");
 
     return true;
   } catch (error) {
@@ -364,10 +375,50 @@ export async function clearLogsForAutomation(
       throw error;
     }
 
+    // Revalidate the automation logs page to reflect the changes
+    revalidatePath(`/automations/${automationId}/logs`);
+
     return true;
   } catch (error) {
     logger.error(
       `Error in clearLogsForAutomation server action for ID ${automationId}:`,
+      error
+    );
+    return false;
+  }
+}
+
+export async function addLogToAutomation(
+  automationId: string,
+  log: {
+    status: "success" | "error";
+    message: string;
+    payload?: Record<string, any>;
+  }
+): Promise<boolean> {
+  try {
+    logger.info(`Server Action: Adding log to automation: ${automationId}`);
+
+    const { error } = await supabase.from("automation_logs").insert({
+      automation_id: automationId,
+      event_type: "custom_log",
+      status: log.status,
+      message: log.message,
+      payload: log.payload,
+      created_at: new Date().toISOString(),
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    // Revalidate the automation logs page to reflect the changes
+    revalidatePath(`/automations/${automationId}/logs`);
+
+    return true;
+  } catch (error) {
+    logger.error(
+      `Error in addLogToAutomation server action for ID ${automationId}:`,
       error
     );
     return false;

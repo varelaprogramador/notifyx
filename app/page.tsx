@@ -54,7 +54,7 @@ export default function LandingPage() {
             </Link>
           </nav>
           <div className="flex items-center gap-4">
-            <Link href="/login">
+            <Link href="/dashboard">
               <Button variant="ghost" size="sm">
                 Login
               </Button>
